@@ -1,0 +1,1324 @@
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+
+# 1. Pick a URL
+url = "https://christuniversity.in/"
+
+# 2. Fetch the page
+headers = {"User-Agent": "LLM-Website-Mapper/0.1"}
+resp = requests.get(url, headers=headers)
+print("Status:", resp.status_code)
+
+
+import networkx as nx
+import plotly.graph_objects as go
+from urllib.parse import urlparse
+
+def visualize_graph_plotly(edges):
+    G = nx.DiGraph()
+
+    # Add edges with labels
+    for e in edges:
+        G.add_edge(e["from"], e["to"], text=e["text"])
+
+    # Layout (same spring force-directed)
+    pos = nx.spring_layout(G, k=0.5, iterations=50)
+
+    # Extract node positions
+    edge_x = []
+    edge_y = []
+    edge_texts = []
+    for edge in G.edges(data=True):
+        x0, y0 = pos[edge[0]]
+        x1, y1 = pos[edge[1]]
+        edge_x += [x0, x1, None]
+        edge_y += [y0, y1, None]
+        edge_texts.append(edge[2].get("text", ""))
+
+    # Draw edges
+    edge_trace = go.Scatter(
+        x=edge_x, y=edge_y,
+        line=dict(width=0.5, color="#888"),
+        hoverinfo="none",
+        mode="lines")
+
+    # Draw nodes
+    node_x = []
+    node_y = []
+    node_labels = []
+    for node in G.nodes():
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        # Shorten URL → only path
+        parsed = urlparse(node)
+        label = parsed.path if parsed.path else parsed.netloc
+        node_labels.append(label)
+
+    node_trace = go.Scatter(
+        x=node_x, y=node_y,
+        mode="markers+text",
+        text=node_labels,
+        textposition="top center",
+        hovertext=list(G.nodes()),
+        hoverinfo="text",
+        marker=dict(
+            showscale=False,
+            color="lightblue",
+            size=15,
+            line=dict(width=2, color="darkblue")
+        )
+    )
+
+    # Build figure
+    fig = go.Figure(data=[edge_trace, node_trace],
+        layout=go.Layout(
+            title="Website Crawl Mind Map (Interactive)",
+            title_x=0.5,
+            showlegend=False,
+            hovermode="closest",
+            margin=dict(b=20, l=5, r=5, t=40),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
+        )
+    )
+
+    fig.show()
+
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+from collections import deque
+import re
+import io
+from PyPDF2 import PdfReader
+import os
+
+
+def extract_pdf_data(pdf_url):
+    """Fetch a PDF and extract title, text, and provide a download link."""
+    try:
+        resp = requests.get(pdf_url, timeout=10, headers={"User-Agent": "LLM-Website-Tree-Crawler/0.1"})
+        if resp.status_code != 200:
+            return None
+
+        pdf_file = io.BytesIO(resp.content)
+        reader = PdfReader(pdf_file)
+
+        # Title from metadata if available
+        title = reader.metadata.title if reader.metadata and reader.metadata.title else None
+
+        # Fallback: filename from URL
+        if not title:
+            parsed_url = urlparse(pdf_url)
+            filename = os.path.basename(parsed_url.path)
+            title = filename if filename else "Untitled PDF"
+
+        # Extract text
+        text_content = []
+        for page in reader.pages:
+            try:
+                text_content.append(page.extract_text() or "")
+            except Exception:
+                pass
+        text = "\n".join(text_content).strip()
+
+        return {
+            "title": title,
+            "download_link": pdf_url,
+            "content": text if text else None
+        }
+    except Exception as e:
+        print("Failed to parse PDF:", pdf_url, e)
+        return None
+
+
+def extract_content(url, soup):
+    """Extract meaningful content from a page."""
+    content = {}
+
+    # Clean visible text
+    for script in soup(["script", "style", "noscript", "header", "footer", "nav"]):
+        script.extract()
+    text = soup.get_text(" ", strip=True)
+    text = re.sub(r"\s+", " ", text)
+    content["text"] = text if len(text) > 50 else None
+
+    # Collect images
+    imgs = []
+    for img in soup.find_all("img", src=True):
+        img_url = urljoin(url, img["src"])
+        imgs.append(img_url)
+    content["images"] = imgs if imgs else None
+
+    # Collect tables
+    tables = []
+    for table in soup.find_all("table"):
+        tables.append(str(table))
+    content["tables"] = tables if tables else None
+
+    # Collect PDFs & other file links
+    pdfs, others = [], []
+    for a in soup.find_all("a", href=True):
+        href = urljoin(url, a["href"])
+        if href.lower().endswith(".pdf"):
+            pdf_data = extract_pdf_data(href)
+            if pdf_data:
+                pdfs.append(pdf_data)
+        elif re.search(r"\.(zip|docx?|xlsx?|pptx?)$", href, re.I):
+            others.append(href)
+    content["pdfs"] = pdfs if pdfs else None
+    content["others"] = others if others else None
+
+    return content
+
+
+def crawl_site_tree(start_url, max_pages=30):
+    domain = urlparse(start_url).netloc
+    visited = set()
+    tree = {}
+
+    queue = deque([start_url])
+
+    while queue and len(visited) < max_pages:
+        url = queue.popleft()
+        if url in visited:
+            continue
+        visited.add(url)
+
+        try:
+            resp = requests.get(url, headers={"User-Agent": "LLM-Website-Tree-Crawler/0.1"}, timeout=10)
+            if resp.status_code != 200 or "text/html" not in resp.headers.get("Content-Type", ""):
+                continue
+        except Exception as e:
+            print("Failed:", url, e)
+            continue
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Extract page content
+        page_content = extract_content(url, soup)
+
+        # Extract children links
+        children = []
+        for a in soup.find_all("a", href=True):
+            absolute = urljoin(url, a["href"])
+            anchor_text = a.get_text(" ", strip=True)
+
+            if urlparse(absolute).netloc != domain:
+                continue
+            if (not anchor_text or anchor_text.isspace()) and not page_content["text"]:
+                continue
+            if absolute in visited:
+                continue
+
+            children.append({
+                "url": absolute,
+                "anchor_text": anchor_text if anchor_text else None
+            })
+            queue.append(absolute)
+
+        # Save structure
+        tree[url] = {
+            "content": page_content,
+            "children": children
+        }
+
+    return tree
+
+
+site_map = crawl_site_tree(url, max_pages=200)
+from neo4j import GraphDatabase
+import uuid
+
+NEO4J_URI = "neo4j+s://2d89aede.databases.neo4j.io"
+NEO4J_USER = "neo4j"
+NEO4J_PASS = "r8oohcevdIWZuEtdedwyw195gE0PYT8gW2KsYqOPIxI"
+
+driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
+
+def upsert_page(tx, url, text_len, title=None):
+    tx.run("""
+    MERGE (p:Page {url:$url})
+    SET p.title = coalesce($title, p.title),
+        p.text_len = $text_len
+    """, url=url, text_len=text_len, title=title)
+
+def upsert_asset(tx, url, type_, filename=None):
+    tx.run("""
+    MERGE (a:Asset {url:$url})
+    SET a.type = $type,
+        a.filename = coalesce($filename, a.filename)
+    """, url=url, type=type_, filename=filename)
+
+def link_contains(tx, page_url, asset_url):
+    tx.run("""
+    MATCH (p:Page {url:$purl}), (a:Asset {url:$aurl})
+    MERGE (p)-[:CONTAINS]->(a)
+    """, purl=page_url, aurl=asset_url)
+
+def link_links_to(tx, from_url, to_url, anchor_text=None):
+    tx.run("""
+    MATCH (a:Page {url:$from_url}), (b:Page {url:$to_url})
+    MERGE (a)-[r:LINKS_TO]->(b)
+    SET r.anchor_text = coalesce($anchor, r.anchor_text)
+    """, from_url=from_url, to_url=to_url, anchor=anchor_text)
+
+def upsert_chunk(tx, chunk_id, modality, text, page_url=None, asset_url=None):
+    tx.run("""
+    MERGE (c:Chunk {id:$id})
+    SET c.modality=$modality,
+        c.text=$text
+    WITH c
+    OPTIONAL MATCH (p:Page {url:$page_url})
+    FOREACH (_ IN CASE WHEN p IS NULL THEN [] ELSE [1] END |
+      MERGE (p)-[:HAS_CHUNK]->(c)
+    )
+    WITH c
+    OPTIONAL MATCH (a:Asset {url:$asset_url})
+    FOREACH (_ IN CASE WHEN a IS NULL THEN [] ELSE [1] END |
+      MERGE (a)-[:HAS_CHUNK]->(c)
+    )
+    """, id=chunk_id, modality=modality, text=text[:6000], 
+         page_url=page_url, asset_url=asset_url)
+
+def ingest_site_map(site_map):
+    with driver.session() as sess:
+        for parent, data in site_map.items():
+            # Page
+            title = data.get("title")
+            text_len = len(data['content'].get('text') or "")
+            sess.execute_write(upsert_page, parent, text_len, title)
+            
+            # Links (children)
+            for child in data.get("children", []):
+                child_url = child["url"]
+                anchor = child.get("anchor_text")
+                sess.execute_write(upsert_page, child_url, 0, None)
+                sess.execute_write(link_links_to, parent, child_url, anchor)
+            
+            # PDFs
+            for pdf in data["content"].get("pdfs") or []:
+                pdf_url = pdf["download_link"]
+                filename = pdf.get("title")
+                sess.execute_write(upsert_asset, pdf_url, "pdf", filename)
+                sess.execute_write(link_contains, parent, pdf_url)
+                
+                # PDF chunks
+                if pdf.get("content"):
+                    chunk_id = str(uuid.uuid5(uuid.NAMESPACE_URL, pdf_url))  # deterministic ID
+                    sess.execute_write(upsert_chunk, chunk_id, "text", pdf["content"], None, pdf_url)
+            
+            # Page text chunks
+            text = data["content"].get("text")
+            if text:
+                chunk_id = str(uuid.uuid5(uuid.NAMESPACE_URL, parent))  # deterministic ID
+                sess.execute_write(upsert_chunk, chunk_id, "text", text, parent, None)
+            ingest_site_map(site_map)
+
+            import uuid
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+from enum import Enum
+import numpy as np
+from sentence_transformers import SentenceTransformer
+import faiss
+from neo4j import GraphDatabase
+import json
+import re
+from collections import defaultdict
+
+class SearchMode(Enum):
+    SEMANTIC = "semantic"
+    GRAPH_WALK = "graph_walk"
+    HYBRID = "hybrid"
+    MULTIMODAL = "multimodal"
+
+@dataclass
+class RetrievedChunk:
+    chunk_id: str
+    text: str
+    modality: str
+    score: float
+    source_url: str
+    source_type: str  # 'page' or 'asset'
+    source_title: Optional[str] = None
+    context_path: Optional[List[str]] = None  # breadcrumb of how we got here
+    related_assets: Optional[List[Dict]] = None
+
+class KnowledgeRetriever:
+    def __init__(self, neo4j_driver, embedding_model="all-MiniLM-L6-v2"):
+        self.driver = neo4j_driver
+        self.embedder = SentenceTransformer(embedding_model)
+        self.chunk_embeddings = {}
+        self.faiss_index = None
+        self.chunk_id_to_index = {}
+        self.index_to_chunk_id = {}
+        
+    def build_vector_index(self):
+        """Build FAISS index for semantic search"""
+        print("Building vector index...")
+        
+        # Get all chunks
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (c:Chunk)
+                RETURN c.id as chunk_id, c.text as text, c.modality as modality
+            """)
+            chunks = list(result)
+            
+        if not chunks:
+            print("No chunks found!")
+            return
+            
+        # Apply text splitting to match what you did during ingestion
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        
+        # Split texts and maintain mapping
+        all_split_texts = []
+        split_to_chunk_mapping = []  # Maps split index to original chunk
+        
+        for chunk in chunks:
+            if chunk['text'] and chunk['text'].strip():  # Check for valid text
+                split_texts = text_splitter.split_text(chunk['text'])
+                for split_text in split_texts:
+                    if split_text.strip():  # Only add non-empty splits
+                        all_split_texts.append(split_text)
+                        split_to_chunk_mapping.append(chunk['chunk_id'])
+        
+        if not all_split_texts:
+            print("No valid text found in chunks!")
+            return
+        
+        print(f"Processing {len(all_split_texts)} text splits from {len(chunks)} chunks")
+        
+        # Generate embeddings for split texts
+        embeddings = self.embedder.encode(all_split_texts, show_progress_bar=True)
+        
+        # Build FAISS index
+        dimension = embeddings.shape[1]
+        self.faiss_index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
+        
+        # Normalize embeddings for cosine similarity
+        faiss.normalize_L2(embeddings)
+        self.faiss_index.add(embeddings.astype(np.float32))
+        
+        # Create mappings for splits
+        self.chunk_id_to_index = {}
+        self.index_to_chunk_id = {}
+        
+        for idx, chunk_id in enumerate(split_to_chunk_mapping):
+            self.index_to_chunk_id[idx] = chunk_id
+            # Note: chunk_id_to_index may have multiple indices for same chunk_id
+            if chunk_id not in self.chunk_id_to_index:
+                self.chunk_id_to_index[chunk_id] = []
+            self.chunk_id_to_index[chunk_id].append(idx)
+            
+        print(f"Built index with {len(all_split_texts)} text splits from {len(chunks)} chunks")
+        
+    def semantic_search(self, query: str, top_k: int = 5) -> List[RetrievedChunk]:
+        """Pure semantic search using embeddings"""
+        if self.faiss_index is None:
+            raise ValueError("Vector index not built. Call build_vector_index() first.")
+            
+        # Embed query
+        query_embedding = self.embedder.encode([query])
+        faiss.normalize_L2(query_embedding)
+        
+        # Search
+        scores, indices = self.faiss_index.search(query_embedding.astype(np.float32), top_k)
+        
+        # Get chunk details from Neo4j
+        chunk_ids = [self.index_to_chunk_id[idx] for idx in indices[0]]
+        
+        with self.driver.session() as session:
+            result = session.run("""
+                UNWIND $chunk_ids as chunk_id
+                MATCH (c:Chunk {id: chunk_id})
+                OPTIONAL MATCH (p:Page)-[:HAS_CHUNK]->(c)
+                OPTIONAL MATCH (a:Asset)-[:HAS_CHUNK]->(c)
+                RETURN c.id as chunk_id, c.text as text, c.modality as modality,
+                       p.url as page_url, p.url as page_title,
+                       a.url as asset_url, a.filename as asset_filename, a.type as asset_type
+            """, chunk_ids=chunk_ids)
+            
+            chunk_data = {row['chunk_id']: row for row in result}
+            
+        # Build results
+        results = []
+        for i, chunk_id in enumerate(chunk_ids):
+            if chunk_id in chunk_data:
+                data = chunk_data[chunk_id]
+                
+                source_url = data['page_url'] or data['asset_url']
+                source_type = 'page' if data['page_url'] else 'asset'
+                source_title = data['page_title'] or data['asset_filename']
+                
+                results.append(RetrievedChunk(
+                    chunk_id=chunk_id,
+                    text=data['text'],
+                    modality=data['modality'],
+                    score=float(scores[0][i]),
+                    source_url=source_url,
+                    source_type=source_type,
+                    source_title=source_title
+                ))
+                
+        return results
+    
+    def graph_walk_search(self, query: str, start_urls: List[str] = None, max_depth: int = 2) -> List[RetrievedChunk]:
+        """Graph-based search following relationships"""
+        
+        with self.driver.session() as session:
+            if start_urls:
+                # Start from specific URLs
+                cypher = """
+                UNWIND $start_urls as url
+                MATCH (start:Page {url: url})
+                CALL {
+                    WITH start
+                    MATCH path = (start)-[:LINKS_TO|CONTAINS*1..%d]-(end)
+                    WHERE end:Page OR end:Asset
+                    RETURN end, length(path) as depth, path
+                }
+                OPTIONAL MATCH (end)-[:HAS_CHUNK]->(c:Chunk)
+                WHERE c.text CONTAINS $query_term OR end.title CONTAINS $query_term
+                RETURN DISTINCT c.id as chunk_id, c.text as text, c.modality as modality,
+                       end.url as source_url, end.title as source_title,
+                       labels(end)[0] as source_type, depth,
+                       [node in nodes(path) | node.url] as path_urls
+                ORDER BY depth, c.id
+                """ % max_depth
+            else:
+                # Global search
+                cypher = """
+                MATCH (c:Chunk)
+                WHERE c.text CONTAINS $query_term
+                OPTIONAL MATCH (p:Page)-[:HAS_CHUNK]->(c)
+                OPTIONAL MATCH (a:Asset)-[:HAS_CHUNK]->(c)
+                RETURN c.id as chunk_id, c.text as text, c.modality as modality,
+                       coalesce(p.url, a.url) as source_url,
+                       coalesce(p.url, a.filename) as source_title,
+                       CASE WHEN p IS NOT NULL THEN 'Page' ELSE 'Asset' END as source_type,
+                       0 as depth, [] as path_urls
+                """
+                
+            # Simple keyword extraction for graph search
+            query_terms = re.findall(r'\b\w+\b', query.lower())
+            main_term = max(query_terms, key=len) if query_terms else query
+            
+            result = session.run(cypher, start_urls=start_urls or [], query_term=main_term)
+            
+            chunks = []
+            for row in result:
+                chunks.append(RetrievedChunk(
+                    chunk_id=row['chunk_id'],
+                    text=row['text'],
+                    modality=row['modality'],
+                    score=1.0 / (row['depth'] + 1),  # Higher score for closer nodes
+                    source_url=row['source_url'],
+                    source_type=row['source_type'].lower(),
+                    source_title=row['source_title'],
+                    context_path=row['path_urls']
+                ))
+                
+        return chunks
+    
+    def multimodal_search(self, query: str, include_assets: bool = True, top_k: int = 10) -> List[RetrievedChunk]:
+        """Search across different modalities with context"""
+        
+        # Start with semantic search
+        semantic_results = self.semantic_search(query, top_k)
+        
+        # Enhance with related assets and context
+        enhanced_results = []
+        
+        with self.driver.session() as session:
+            for chunk in semantic_results:
+                # Get related assets for page chunks
+                if chunk.source_type == 'page' and include_assets:
+                    related_assets_result = session.run("""
+                        MATCH (p:Page {url: $page_url})-[:CONTAINS]->(a:Asset)
+                        RETURN a.url as url, a.type as type, a.filename as filename
+                        LIMIT 5
+                    """, page_url=chunk.source_url)
+                    
+                    related_assets = [dict(row) for row in related_assets_result]
+                    chunk.related_assets = related_assets if related_assets else None
+                
+                enhanced_results.append(chunk)
+                
+        return enhanced_results
+    
+    def hybrid_search(self, query: str, semantic_weight: float = 0.7, graph_weight: float = 0.3, 
+                     top_k: int = 10) -> List[RetrievedChunk]:
+        """Combine semantic and graph search"""
+        
+        # Get results from both methods
+        semantic_results = self.semantic_search(query, top_k * 2)
+        graph_results = self.graph_walk_search(query)
+        
+        # Combine and re-rank
+        combined_scores = defaultdict(float)
+        all_chunks = {}
+        
+        # Add semantic scores
+        for chunk in semantic_results:
+            combined_scores[chunk.chunk_id] += chunk.score * semantic_weight
+            all_chunks[chunk.chunk_id] = chunk
+            
+        # Add graph scores
+        for chunk in graph_results:
+            combined_scores[chunk.chunk_id] += chunk.score * graph_weight
+            if chunk.chunk_id not in all_chunks:
+                all_chunks[chunk.chunk_id] = chunk
+            else:
+                # Merge context path if available
+                if chunk.context_path and not all_chunks[chunk.chunk_id].context_path:
+                    all_chunks[chunk.chunk_id].context_path = chunk.context_path
+        
+        # Sort by combined score
+        sorted_chunks = sorted(
+            [(chunk_id, score) for chunk_id, score in combined_scores.items()],
+            key=lambda x: x[1], reverse=True
+        )[:top_k]
+        
+        # Update scores and return
+        results = []
+        for chunk_id, score in sorted_chunks:
+            chunk = all_chunks[chunk_id]
+            chunk.score = score
+            results.append(chunk)
+            
+        return results
+    
+    def get_context_window(self, chunk_id: str, window_size: int = 2) -> Dict[str, Any]:
+        """Get surrounding context for a chunk"""
+        
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (c:Chunk {id: $chunk_id})
+                OPTIONAL MATCH (source)-[:HAS_CHUNK]->(c)
+                WHERE source:Page OR source:Asset
+                
+                // Get related chunks from same source
+                OPTIONAL MATCH (source)-[:HAS_CHUNK]->(related:Chunk)
+                WHERE related <> c
+                
+                // Get connected pages/assets
+                OPTIONAL MATCH (source)-[:LINKS_TO|CONTAINS]-(connected)
+                WHERE connected:Page OR connected:Asset
+                OPTIONAL MATCH (connected)-[:HAS_CHUNK]->(connected_chunk:Chunk)
+                
+                RETURN c, source,
+                       collect(DISTINCT related)[..5] as related_chunks,
+                       collect(DISTINCT {node: connected, chunks: collect(DISTINCT connected_chunk)})[..3] as connected_sources
+            """, chunk_id=chunk_id)
+            
+            row = result.single()
+            if not row:
+                return {}
+                
+            return {
+                'chunk': dict(row['c']),
+                'source': dict(row['source']),
+                'related_chunks': [dict(c) for c in row['related_chunks']],
+                'connected_sources': row['connected_sources']
+            }
+    
+    def search(self, query: str, mode: SearchMode = SearchMode.HYBRID, **kwargs) -> List[RetrievedChunk]:
+        """Main search interface"""
+        
+        if mode == SearchMode.SEMANTIC:
+            return self.semantic_search(query, **kwargs)
+        elif mode == SearchMode.GRAPH_WALK:
+            return self.graph_walk_search(query, **kwargs)
+        elif mode == SearchMode.MULTIMODAL:
+            return self.multimodal_search(query, **kwargs)
+        elif mode == SearchMode.HYBRID:
+            return self.hybrid_search(query, **kwargs)
+        else:
+            raise ValueError(f"Unknown search mode: {mode}")
+    
+    def format_for_llm(self, chunks: List[RetrievedChunk], include_context: bool = True) -> str:
+        """Format retrieved chunks for LLM consumption"""
+        
+        formatted_parts = []
+        
+        for i, chunk in enumerate(chunks, 1):
+            part = f"## Source {i} (Score: {chunk.score:.3f})\n"
+            part += f"**Type:** {chunk.source_type.title()}\n"
+            part += f"**URL:** {chunk.source_url}\n"
+            
+            if chunk.source_title:
+                part += f"**Title:** {chunk.source_title}\n"
+                
+            if chunk.modality != 'text':
+                part += f"**Modality:** {chunk.modality}\n"
+                
+            if chunk.context_path and include_context:
+                path_str = " → ".join(chunk.context_path[-3:])  # Last 3 steps
+                part += f"**Path:** {path_str}\n"
+                
+            if chunk.related_assets and include_context:
+                assets_str = ", ".join([f"{a['filename']} ({a['type']})" for a in chunk.related_assets[:3]])
+                part += f"**Related Assets:** {assets_str}\n"
+                
+            part += f"\n**Content:**\n{chunk.text}\n\n"
+            
+            formatted_parts.append(part)
+            
+        return "\n".join(formatted_parts)
+
+# Example usage
+def example_usage():
+    # Initialize
+    driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "password"))
+    retriever = KnowledgeRetriever(driver)
+    
+    # Build vector index (do this once)
+    retriever.build_vector_index()
+    
+    # Different search modes
+    query = "machine learning algorithms"
+    
+    # Semantic search
+    semantic_results = retriever.search(query, SearchMode.SEMANTIC, top_k=5)
+    
+    # Graph walk search
+    graph_results = retriever.search(query, SearchMode.GRAPH_WALK, max_depth=2)
+    
+    # Multimodal search (includes related assets)
+    multimodal_results = retriever.search(query, SearchMode.MULTIMODAL, include_assets=True)
+    
+    # Hybrid search (recommended)
+    hybrid_results = retriever.search(query, SearchMode.HYBRID, top_k=10)
+    
+    # Format for LLM
+    llm_context = retriever.format_for_llm(hybrid_results)
+    print("=== LLM CONTEXT ===")
+    print(llm_context)
+    
+    # Get detailed context for a specific chunk
+    if hybrid_results:
+        context = retriever.get_context_window(hybrid_results[0].chunk_id)
+        print("\n=== DETAILED CONTEXT ===")
+        print(json.dumps(context, indent=2, default=str))
+
+from neo4j import GraphDatabase
+
+driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
+retriever = KnowledgeRetriever(driver)
+    
+    # Build vector index (do this once)
+retriever.build_vector_index()
+
+import json
+import re
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass, asdict
+from enum import Enum
+from langchain_groq import ChatGroq
+from langchain.schema import HumanMessage, SystemMessage, AIMessage
+from langchain.memory import ConversationBufferMemory
+import networkx as nx
+from collections import defaultdict, deque
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+import time
+# Web Owl personality configuration
+WEB_OWL_PERSONALITY = {
+    "humor_level": 0.1,
+    "professionalism": 0.7,
+    "helpfulness": 0.8,
+    "curiosity": 0.7
+}
+
+class AgentRole(Enum):
+    INFORMATION_STRUCTURER = "information_structurer"
+    SITE_MAPPER = "site_mapper" 
+    RESPONSE_STRUCTURER = "response_structurer"
+    FINAL_VERIFIER = "final_verifier"
+
+@dataclass
+class WebOwlResponse:
+    query: str
+    final_answer: str
+    structured_info: Dict[str, Any]
+    site_navigation: Dict[str, Any]
+    confidence_score: float
+    sources_used: List[str]
+    navigation_path: List[str]
+    humor_quote: Optional[str] = None
+class SearchMode(Enum):
+    SEMANTIC = "semantic"
+    GRAPH_WALK = "graph_walk"
+    HYBRID = "hybrid"
+    MULTIMODAL = "multimodal"
+class SiteMapper:
+    """Enhanced site mapper that understands website structure and relationships"""
+    
+    def __init__(self, retriever):
+        self.retriever = retriever
+        self.site_graph = nx.DiGraph()
+        self._build_site_graph()
+        
+    def _build_site_graph(self):
+        """Build a comprehensive site graph from Neo4j data"""
+        print("🦉 Building site navigation map...")
+        
+        with self.retriever.driver.session() as session:
+            # Get all pages and their relationships
+            result = session.run("""
+                MATCH (p:Page)
+                OPTIONAL MATCH (p)-[r:LINKS_TO]->(target:Page)
+                OPTIONAL MATCH (p)-[:CONTAINS]->(a:Asset)
+                RETURN p.url as page_url, p.text_len as content_length,
+                       collect(DISTINCT {url: target.url, anchor: r.anchor_text}) as links,
+                       collect(DISTINCT {url: a.url, type: a.type, filename: a.filename}) as assets
+            """)
+            
+            for row in result:
+                page_url = row['page_url']
+                
+                # Add page node with metadata
+                self.site_graph.add_node(page_url, 
+                                       node_type='page',
+                                       content_length=row['content_length'],
+                                       assets=row['assets'])
+                
+                # Add links as edges
+                for link in row['links']:
+                    if link['url']:
+                        self.site_graph.add_edge(page_url, link['url'], 
+                                               anchor_text=link['anchor'],
+                                               edge_type='navigation')
+                
+                # Add assets as nodes and connections
+                for asset in row['assets']:
+                    if asset['url']:
+                        asset_url = asset['url']
+                        self.site_graph.add_node(asset_url,
+                                               node_type='asset',
+                                               asset_type=asset['type'],
+                                               filename=asset['filename'])
+                        self.site_graph.add_edge(page_url, asset_url,
+                                               edge_type='contains')
+        
+        print(f"🗺️ Site map built: {self.site_graph.number_of_nodes()} pages/assets, {self.site_graph.number_of_edges()} connections")
+    
+    def find_navigation_path(self, start_url: str, target_content: str) -> List[str]:
+        """Find the best navigation path to reach specific content"""
+        
+        # Find pages that might contain the target content
+        relevant_pages = []
+        with self.retriever.driver.session() as session:
+            result = session.run("""
+                MATCH (c:Chunk)
+                WHERE c.text CONTAINS $content
+                OPTIONAL MATCH (p:Page)-[:HAS_CHUNK]->(c)
+                RETURN DISTINCT p.url as page_url
+                LIMIT 5
+            """, content=target_content.lower())
+            
+            relevant_pages = [row['page_url'] for row in result if row['page_url']]
+        
+        if not relevant_pages:
+            return []
+            
+        # Find shortest path to most relevant page
+        paths = []
+        for target_page in relevant_pages:
+            if start_url in self.site_graph and target_page in self.site_graph:
+                try:
+                    path = nx.shortest_path(self.site_graph, start_url, target_page)
+                    paths.append(path)
+                except nx.NetworkXNoPath:
+                    continue
+        
+        return min(paths, key=len) if paths else []
+    
+    def get_page_context(self, url: str) -> Dict[str, Any]:
+        """Get comprehensive context about a page"""
+        if url not in self.site_graph:
+            return {}
+            
+        node_data = self.site_graph.nodes[url]
+        
+        # Get incoming and outgoing links
+        incoming = list(self.site_graph.predecessors(url))
+        outgoing = list(self.site_graph.successors(url))
+        
+        # Get related assets
+        assets = [n for n in outgoing if self.site_graph.nodes[n].get('node_type') == 'asset']
+        
+        return {
+            'url': url,
+            'content_length': node_data.get('content_length', 0),
+            'incoming_links': len(incoming),
+            'outgoing_links': len([n for n in outgoing if self.site_graph.nodes[n].get('node_type') == 'page']),
+            'assets': assets,
+            'parent_pages': incoming,
+            'child_pages': [n for n in outgoing if self.site_graph.nodes[n].get('node_type') == 'page']
+        }
+    
+    def generate_sitemap_summary(self) -> Dict[str, Any]:
+        """Generate a summary of the site structure"""
+        pages = [n for n in self.site_graph.nodes() if self.site_graph.nodes[n].get('node_type') == 'page']
+        assets = [n for n in self.site_graph.nodes() if self.site_graph.nodes[n].get('node_type') == 'asset']
+        
+        # Find root pages (pages with no incoming links from other pages)
+        root_pages = [n for n in pages if not any(
+            self.site_graph.nodes[pred].get('node_type') == 'page' 
+            for pred in self.site_graph.predecessors(n)
+        )]
+        
+        # Calculate depth of each page
+        page_depths = {}
+        for root in root_pages:
+            distances = nx.single_source_shortest_path_length(self.site_graph, root)
+            for page, depth in distances.items():
+                if self.site_graph.nodes[page].get('node_type') == 'page':
+                    page_depths[page] = min(page_depths.get(page, float('inf')), depth)
+        
+        return {
+            'total_pages': len(pages),
+            'total_assets': len(assets),
+            'root_pages': root_pages,
+            'max_depth': max(page_depths.values()) if page_depths else 0,
+            'avg_links_per_page': sum(len(list(self.site_graph.successors(p))) for p in pages) / len(pages) if pages else 0
+        }
+
+class WebOwlAgent:
+    """Base class for Web Owl agents with personality"""
+    
+    def __init__(self, role: AgentRole, llm_client, personality: Dict[str, float] = None):
+        self.role = role
+        self.llm = llm_client
+        self.personality = personality or WEB_OWL_PERSONALITY
+        self.memory = ConversationBufferMemory()
+        
+    def _add_personality_to_prompt(self, base_prompt: str) -> str:
+        """Add Web Owl personality traits to prompts"""
+        personality_traits = f"""
+You are Web Owl 🦉, an intelligent web navigation assistant with these traits:
+- {int(self.personality['humor_level'] * 100)}% humor (add light wit and owl puns where appropriate)
+- {int(self.personality['professionalism'] * 100)}% professionalism (maintain expertise and accuracy)
+- {int(self.personality['helpfulness'] * 100)}% helpfulness (go above and beyond for users)
+- {int(self.personality['curiosity'] * 100)}% curiosity (explore connections and provide insights)
+
+Your role: {self.role.value.replace('_', ' ').title()}
+
+{base_prompt}
+
+Remember to be helpful while maintaining a balance of professionalism and light humor. Think like a wise owl who knows the web inside and out! 🦉
+"""
+        return personality_traits
+    
+    def generate_humor_quote(self) -> str:
+        """Generate a light humor quote for responses"""
+        quotes = [
+            "Hoot hoot! Knowledge is power, but navigation is key! 🦉",
+            "As wise owls say: 'The best information is just a click away!' 🔍",
+            "Flying through the web faster than a night owl! 🌙",
+            "Who needs Google when you have owl-some navigation skills? 😄",
+            "Perching on the perfect answer, one search at a time! 🎯"
+        ]
+        import random
+        return random.choice(quotes) if self.personality['humor_level'] > 0.15 else None
+
+class InformationStructurerAgent(WebOwlAgent):
+    """Structures and organizes retrieved information"""
+    
+    def __init__(self, llm_client, retriever):
+        super().__init__(AgentRole.INFORMATION_STRUCTURER, llm_client)
+        self.retriever = retriever
+        
+    def structure_information(self, query: str, retrieved_chunks: List) -> Dict[str, Any]:
+        """Structure retrieved information by relevance, source, and content type"""
+        
+        prompt = self._add_personality_to_prompt(f"""
+Analyze and structure the following retrieved information for the query: "{query}"
+
+Retrieved Information:
+{self._format_chunks_for_analysis(retrieved_chunks)}
+
+Your task:
+1. Categorize information by topic/theme
+2. Identify key facts, procedures, and concepts
+3. Note information gaps or inconsistencies
+4. Rank information by relevance to the query
+5. Identify the most authoritative sources
+
+Provide a structured JSON response with:
+- categorized_info: Dict with themes as keys
+- key_facts: List of most important facts
+- information_gaps: List of missing information
+- source_authority: Ranking of sources by reliability
+- relevance_scores: Scores for each piece of information
+""")
+        
+        messages = [SystemMessage(content=prompt)]
+        
+        response = self.llm.invoke(messages)
+        try:
+            # Extract JSON from response
+            json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+        except:
+            pass
+            
+        # Fallback manual structuring
+        return self._manual_structure(query, retrieved_chunks)
+    
+    def _format_chunks_for_analysis(self, chunks: List) -> str:
+        """Format chunks for LLM analysis"""
+        formatted = []
+        for i, chunk in enumerate(chunks, 1):
+            formatted.append(f"""
+Source {i}:
+URL: {getattr(chunk, 'source_url', 'Unknown')}
+Type: {getattr(chunk, 'source_type', 'Unknown')}
+Score: {getattr(chunk, 'score', 0):.3f}
+Content: {getattr(chunk, 'text', '')[:500]}...
+""")
+        return "\n".join(formatted)
+    
+    def _manual_structure(self, query: str, chunks: List) -> Dict[str, Any]:
+        """Fallback manual structuring"""
+        return {
+            "categorized_info": {"main_content": [chunk.text for chunk in chunks]},
+            "key_facts": [chunk.text[:200] for chunk in chunks[:3]],
+            "information_gaps": ["Additional context may be needed"],
+            "source_authority": [chunk.source_url for chunk in chunks],
+            "relevance_scores": [chunk.score for chunk in chunks]
+        }
+
+class SiteMappingAgent(WebOwlAgent):
+    """Analyzes site structure and navigation patterns"""
+    
+    def __init__(self, llm_client, site_mapper: SiteMapper):
+        super().__init__(AgentRole.SITE_MAPPER, llm_client)
+        self.site_mapper = site_mapper
+        
+    def analyze_navigation(self, query: str, relevant_sources: List[str]) -> Dict[str, Any]:
+        """Analyze navigation patterns and suggest optimal paths"""
+        
+        sitemap_summary = self.site_mapper.generate_sitemap_summary()
+        
+        # Get context for relevant sources
+        source_contexts = {}
+        for source_url in relevant_sources:
+            source_contexts[source_url] = self.site_mapper.get_page_context(source_url)
+        
+        prompt = self._add_personality_to_prompt(f"""
+Analyze the website navigation for query: "{query}"
+
+Site Structure Summary:
+{json.dumps(sitemap_summary, indent=2)}
+
+Relevant Source Contexts:
+{json.dumps(source_contexts, indent=2)}
+
+Your task:
+1. Identify the main content areas relevant to the query
+2. Suggest optimal navigation paths to reach this information
+3. Identify any content relationships or hierarchies
+4. Recommend related pages user might find useful
+5. Note any navigation challenges or dead ends
+
+Provide insights about:
+- Primary content locations
+- Recommended navigation flow
+- Related/alternative pages
+- Content organization patterns
+""")
+        
+        messages = [SystemMessage(content=prompt)]
+        
+        response = self.llm.invoke(messages)
+        
+        # Find navigation paths
+        navigation_paths = []
+        if relevant_sources and sitemap_summary['root_pages']:
+            for source in relevant_sources[:3]:
+                for root in sitemap_summary['root_pages']:
+                    path = self.site_mapper.find_navigation_path(root, query)
+                    if path:
+                        navigation_paths.append(path)
+        
+        return {
+            "analysis": response.content,
+            "sitemap_summary": sitemap_summary,
+            "navigation_paths": navigation_paths[:5],  # Top 5 paths
+            "source_contexts": source_contexts
+        }
+
+class ResponseStructurerAgent(WebOwlAgent):
+    """Structures the final response in a user-friendly format"""
+    
+    def __init__(self, llm_client):
+        super().__init__(AgentRole.RESPONSE_STRUCTURER, llm_client)
+        
+    def structure_response(self, query: str, structured_info: Dict, navigation_analysis: Dict) -> Dict[str, Any]:
+        """Create a well-structured, comprehensive response"""
+        
+        prompt = self._add_personality_to_prompt(f"""
+Create a comprehensive, well-structured response for: "{query}"
+
+Structured Information:
+{json.dumps(structured_info, indent=2)}
+
+Navigation Analysis:
+{json.dumps(navigation_analysis, indent=2)}
+
+Create a response with:
+1. **Direct Answer**: Clear, concise answer to the query
+2. **Detailed Explanation**: Comprehensive information with context
+3. **Navigation Guide**: How to find this information on the site || how to reach the page from the main home page
+4. **Related Topics**: Suggestions for further exploration
+5. **Source References**: Properly cited sources
+
+Format as a structured response that's both informative and easy to navigate.
+Include relevant navigation paths and make it actionable for the user.
+""")
+        
+        messages = [SystemMessage(content=prompt)]
+        
+        response = self.llm.invoke(messages)
+        
+        return {
+            "structured_response": response.content,
+            "confidence_indicators": self._assess_confidence(structured_info),
+            "actionable_next_steps": self._generate_next_steps(navigation_analysis)
+        }
+    
+    # def _assess_confidence(self, structured_info: Dict) -> Dict[str, Any]:
+    #     """Assess confidence in the response"""
+    #     return {
+    #         "information_completeness": len(structured_info.get("key_facts", [])) / 5.0,
+    #         "source_diversity": min(len(set(structured_info.get("source_authority", []))), 5) / 5.0,
+    #         "gap_analysis": 1.0 - (len(structured_info.get("information_gaps", [])) / 10.0)
+    #     }
+    def _assess_confidence(self, structured_info: Dict) -> Dict[str, Any]:
+        """Assess confidence in the response"""
+    # Handle case where source_authority may contain dicts instead of strings
+        source_authorities = structured_info.get("source_authority", [])
+        if isinstance(source_authorities, list) and source_authorities and isinstance(source_authorities[0], dict):
+            source_authorities = [item.get("url", str(item)) for item in source_authorities]
+
+        return {
+            "information_completeness": len(structured_info.get("key_facts", [])) / 5.0,
+            "source_diversity": min(len(set(source_authorities)), 5) / 5.0,
+            "gap_analysis": 1.0 - (len(structured_info.get("information_gaps", [])) / 10.0)
+             }
+    
+    def _generate_next_steps(self, navigation_analysis: Dict) -> List[str]:
+        """Generate actionable next steps"""
+        steps = []
+        
+        if navigation_analysis.get("navigation_paths"):
+            steps.append("Navigate using the recommended paths provided")
+            
+        if navigation_analysis.get("source_contexts"):
+            steps.append("Explore related pages for additional context")
+            
+        steps.append("Use the site structure information to find related topics")
+        return steps
+
+class FinalVerifierAgent(WebOwlAgent):
+    """Verifies and validates the final response"""
+    
+    def __init__(self, llm_client):
+        super().__init__(AgentRole.FINAL_VERIFIER, llm_client)
+        
+    def verify_response(self, query: str, structured_response: Dict, original_chunks: List) -> WebOwlResponse:
+        """Verify response accuracy and completeness"""
+        
+        prompt = self._add_personality_to_prompt(f"""
+Verify the accuracy and completeness of this response for query: "{query}"
+
+Original Query: {query}
+
+Structured Response:
+{json.dumps(structured_response, indent=2)}
+
+Original Source Material:
+{self._format_original_sources(original_chunks)}
+
+Verification Tasks:
+1. Check factual accuracy against original sources
+2. Assess completeness of the answer
+3. Verify navigation recommendations are logical
+4. Ensure response addresses the user's intent
+5. Validate source citations are correct
+
+Rate confidence (0-1) and provide final polished response.
+Include any corrections or additional context needed.
+""")
+        
+        messages = [SystemMessage(content=prompt)]
+        response = self.llm.invoke(messages)
+        
+        # Calculate confidence score
+        confidence_score = self._calculate_confidence(structured_response, original_chunks)
+        
+        # Extract sources used
+        sources_used = list(set([
+            getattr(chunk, 'source_url', 'Unknown') 
+            for chunk in original_chunks
+        ]))
+        
+        return WebOwlResponse(
+            query=query,
+            final_answer=response.content,
+            structured_info=structured_response.get("structured_response", {}),
+            site_navigation=structured_response.get("actionable_next_steps", {}),
+            confidence_score=confidence_score,
+            sources_used=sources_used,
+            navigation_path=structured_response.get("navigation_paths", []),
+            humor_quote=self.generate_humor_quote()
+        )
+    
+    def _format_original_sources(self, chunks: List) -> str:
+        """Format original sources for verification"""
+        return "\n".join([
+            f"Source: {getattr(chunk, 'source_url', 'Unknown')}\nContent: {getattr(chunk, 'text', '')[:300]}..."
+            for chunk in chunks[:5]
+        ])
+    
+    def _calculate_confidence(self, structured_response: Dict, original_chunks: List) -> float:
+        """Calculate overall confidence score"""
+        factors = []
+        
+        # Source quality
+        if original_chunks:
+            avg_score = sum(getattr(chunk, 'score', 0) for chunk in original_chunks) / len(original_chunks)
+            factors.append(avg_score)
+        
+        # Response completeness
+        confidence_indicators = structured_response.get("confidence_indicators", {})
+        if confidence_indicators:
+            factors.extend(confidence_indicators.values())
+        
+        return sum(factors) / len(factors) if factors else 0.5
+
+class WebOwlMultiAgentRAG:
+    """Main orchestrator for the Web Owl multi-agent RAG system"""
+    
+    def __init__(self, retriever, groq_api_key: str, model_name: str = "llama3-70b-8192"):
+        self.retriever = retriever
+        self.llm = ChatGroq(groq_api_key=groq_api_key, model_name=model_name)
+        
+        # Initialize site mapper
+        self.site_mapper = SiteMapper(retriever)
+        
+        # Initialize agents
+        self.info_structurer = InformationStructurerAgent(self.llm, retriever)
+        self.site_mapping_agent = SiteMappingAgent(self.llm, self.site_mapper)
+        self.response_structurer = ResponseStructurerAgent(self.llm)
+        self.final_verifier = FinalVerifierAgent(self.llm)
+        
+        print("🦉 Web Owl Multi-Agent RAG System initialized!")
+        print(f"📊 Site Map: {self.site_mapper.site_graph.number_of_nodes()} nodes, {self.site_mapper.site_graph.number_of_edges()} edges")
+    
+    def answer_query(self, query: str, search_mode: str = "HYBRID") -> WebOwlResponse:
+        """Process query through multi-agent pipeline"""
+        
+        print(f"🦉 Web Owl is processing: '{query}'")
+        
+        # Step 1: Retrieve information
+        print("📚 Retrieving relevant information...")
+        
+        search_mode_enum = getattr(SearchMode, search_mode)
+        retrieved_chunks = self.retriever.search(query, search_mode_enum, top_k=10)
+        
+        if not retrieved_chunks:
+            return WebOwlResponse(
+                query=query,
+                final_answer="Hoot! I couldn't find any relevant information in my knowledge base. Try a different search term or check if the content exists! 🦉",
+                structured_info={},
+                site_navigation={},
+                confidence_score=0.0,
+                sources_used=[],
+                navigation_path=[],
+                humor_quote="Even owls have their off days! 😅"
+            )
+        # Step 2: Structure information
+        print("🔍 Agent 1: Structuring information...")
+        structured_info = self.info_structurer.structure_information(query, retrieved_chunks)
+        time.sleep(60)
+        # Step 3: Analyze site navigation
+        print("🗺️ Agent 2: Analyzing site navigation...")
+        relevant_sources = [getattr(chunk, 'source_url', '') for chunk in retrieved_chunks[:5]]
+        navigation_analysis = self.site_mapping_agent.analyze_navigation(query, relevant_sources)
+        time.sleep(60)
+        # Step 4: Structure response
+        print("📝 Agent 3: Structuring response...")
+        structured_response = self.response_structurer.structure_response(
+            query, structured_info, navigation_analysis
+        )
+        # time.sleep(50)
+        # # Step 5: Final verification
+        # print("✅ Agent 4: Verifying and finalizing...")
+        # final_response = self.final_verifier.verify_response(
+        #     query, structured_response, retrieved_chunks
+        # )
+        
+        print(f"🎯 Response complete! Confidence: {final_response.confidence_score:.2f}")
+        
+        return structured_response
+    
+    def get_system_stats(self) -> Dict[str, Any]:
+        """Get system statistics"""
+        return {
+            "site_mapper": self.site_mapper.generate_sitemap_summary(),
+            "agents": {
+                "information_structurer": "Active",
+                "site_mapper": "Active", 
+                "response_structurer": "Active",
+                "final_verifier": "Active"
+            },
+            "personality": WEB_OWL_PERSONALITY
+        }
+
+# Usage example
+def example_usage():
+    """Example of how to use Web Owl Multi-Agent RAG"""
+    
+    # Initialize (assuming you have retriever and Groq API key)
+    from neo4j import GraphDatabase
+    from knowledge_retriever import KnowledgeRetriever
+    
+    driver = GraphDatabase.driver("neo4j+s://your-uri", auth=("neo4j", "password"))
+    retriever = KnowledgeRetriever(driver)
+    retriever.build_vector_index()
+    
+    # Initialize Web Owl
+    web_owl = WebOwlMultiAgentRAG(retriever, groq_api_key="your-groq-api-key")
+    
+    # Query the system
+    response = web_owl.answer_query("What master programs are available?")
+    
+    # Display results
+    print("🦉 WEB OWL RESPONSE 🦉")
+    print("=" * 50)
+    print(f"Query: {response.query}")
+    print(f"Confidence: {response.confidence_score:.2f}")
+    if response.humor_quote:
+        print(f"💫 {response.humor_quote}")
+    print("\n📋 ANSWER:")
+    print(response.final_answer)
+    print(f"\n📚 Sources Used ({len(response.sources_used)}):")
+    for i, source in enumerate(response.sources_used[:5], 1):
+        print(f"{i}. {source}")
+    
+    if response.navigation_path:
+        print("\n🗺️ Navigation Path:")
+        for step in response.navigation_path[0][:5]:  # First path, max 5 steps
+            print(f"→ {step}")
+
