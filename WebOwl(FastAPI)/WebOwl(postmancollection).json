@@ -1,0 +1,592 @@
+{
+    "info": {
+        "_postman_id": "web-owl-rag-api",
+        "name": "Web Owl RAG API",
+        "description": "Complete API collection for Web Owl RAG - Intelligent web navigation and information retrieval system with conversation memory.\n\n## Overview\nWeb Owl is a conversational AI assistant that provides intelligent information retrieval with:\n- Multi-modal search capabilities\n- Conversation memory and context awareness\n- Site navigation analysis\n- Confidence scoring and source attribution\n\n## Base URL\n```\nhttp://localhost:8000\n```\n\n## Authentication\nNo authentication required for local development.\n\n## Environment Variables\nSet these variables in your Postman environment:\n- `baseUrl`: http://localhost:8000\n- `sessionId`: (will be set automatically from responses)\n\n## Usage Flow\n1. Check system health with `/health`\n2. Query the system with `/query` \n3. View conversation history with `/conversation/{sessionId}`\n4. Clear conversations when needed\n\n## Error Handling\nThe API returns standard HTTP status codes:\n- 200: Success\n- 400: Bad Request\n- 404: Not Found\n- 500: Internal Server Error\n- 503: Service Unavailable",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        "_exporter_id": "web-owl-rag"
+    },
+    "item": [
+        {
+            "name": "System Health & Info",
+            "item": [
+                {
+                    "name": "Root - API Info",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Status code is 200\", function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test(\"Response contains service info\", function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData).to.have.property('service');",
+                                    "    pm.expect(jsonData.service).to.include('Web Owl');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Accept",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                ""
+                            ]
+                        },
+                        "description": "Get basic API information and version details.\n\n**Response:**\n- `service`: API service name\n- `version`: Current version\n- `description`: Service description\n- `endpoints`: Link to documentation"
+                    }
+                },
+                {
+                    "name": "Health Check",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Status code is 200 or 503\", function () {",
+                                    "    pm.expect(pm.response.code).to.be.oneOf([200, 503]);",
+                                    "});",
+                                    "",
+                                    "pm.test(\"Response contains status\", function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData).to.have.property('status');",
+                                    "});",
+                                    "",
+                                    "if (pm.response.code === 200) {",
+                                    "    pm.test(\"System is healthy\", function () {",
+                                    "        var jsonData = pm.response.json();",
+                                    "        pm.expect(jsonData.status).to.equal('healthy');",
+                                    "    });",
+                                    "}"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Accept",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/health",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "health"
+                            ]
+                        },
+                        "description": "Check system health status and get system statistics.\n\n**Response:**\n- `status`: System status (healthy/degraded)\n- `system_stats`: System statistics and configuration\n- `retriever_type`: Type of retriever being used (Neo4j/Offline)\n\n**Status Codes:**\n- 200: System healthy\n- 503: System degraded or unavailable"
+                    }
+                },
+                {
+                    "name": "Get Search Modes",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Status code is 200\", function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test(\"Response contains search modes\", function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData).to.have.property('search_modes');",
+                                    "    pm.expect(jsonData.search_modes).to.be.an('array');",
+                                    "    pm.expect(jsonData.search_modes).to.include('HYBRID');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Accept",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/search-modes",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "search-modes"
+                            ]
+                        },
+                        "description": "Get available search modes and their descriptions.\n\n**Available Modes:**\n- `SEMANTIC`: Pure semantic search using embeddings\n- `GRAPH_WALK`: Graph-based search following relationships\n- `HYBRID`: Combines semantic and graph search (recommended)\n- `MULTIMODAL`: Search across different content types with context\n\n**Response:**\n- `search_modes`: Array of available modes\n- `descriptions`: Detailed description of each mode"
+                    }
+                }
+            ],
+            "description": "Endpoints for checking system status and getting basic information about the API."
+        },
+        {
+            "name": "Query & Search",
+            "item": [
+                {
+                    "name": "Query Knowledge Base",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Status code is 200 or 503\", function () {",
+                                    "    pm.expect(pm.response.code).to.be.oneOf([200, 503]);",
+                                    "});",
+                                    "",
+                                    "if (pm.response.code === 200) {",
+                                    "    pm.test(\"Response contains required fields\", function () {",
+                                    "        var jsonData = pm.response.json();",
+                                    "        pm.expect(jsonData).to.have.property('session_id');",
+                                    "        pm.expect(jsonData).to.have.property('query');",
+                                    "        pm.expect(jsonData).to.have.property('answer');",
+                                    "        pm.expect(jsonData).to.have.property('confidence_score');",
+                                    "    });",
+                                    "    ",
+                                    "    // Save session ID for future requests",
+                                    "    var jsonData = pm.response.json();",
+                                    "    if (jsonData.session_id) {",
+                                    "        pm.environment.set('sessionId', jsonData.session_id);",
+                                    "    }",
+                                    "}"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json",
+                                "type": "text"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"query\": \"What master programs are available?\",\n    \"search_mode\": \"HYBRID\",\n    \"user_id\": \"test-user-123\",\n    \"session_id\": null\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/query",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "query"
+                            ]
+                        },
+                        "description": "Main query endpoint for interacting with the Web Owl RAG system.\n\n**Request Body:**\n- `query` (required): The question or search query\n- `search_mode` (optional): Search mode to use (default: HYBRID)\n- `user_id` (optional): User identifier for tracking\n- `session_id` (optional): Session ID for conversation continuity\n\n**Response:**\n- `session_id`: Session identifier for conversation tracking\n- `query`: Original query\n- `answer`: Web Owl's response\n- `confidence_score`: Confidence in the answer (0-1)\n- `sources`: List of source URLs used\n- `navigation_path`: Suggested navigation path\n- `timestamp`: Response timestamp\n- `search_mode`: Search mode used\n\n**Example Queries:**\n- \"What master programs are available?\"\n- \"How do I apply for admission?\"\n- \"Tell me about computer science courses\"\n- \"What are the admission requirements?\""
+                    }
+                },
+                {
+                    "name": "Follow-up Query",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Status code is 200 or 503\", function () {",
+                                    "    pm.expect(pm.response.code).to.be.oneOf([200, 503]);",
+                                    "});",
+                                    "",
+                                    "if (pm.response.code === 200) {",
+                                    "    pm.test(\"Uses existing session\", function () {",
+                                    "        var jsonData = pm.response.json();",
+                                    "        pm.expect(jsonData.session_id).to.equal(pm.environment.get('sessionId'));",
+                                    "    });",
+                                    "}"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json",
+                                "type": "text"
+                            },
+                            {
+                                "key": "Accept",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"query\": \"Tell me more about the first program you mentioned\",\n    \"search_mode\": \"HYBRID\",\n    \"session_id\": \"{{sessionId}}\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/query",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "query"
+                            ]
+                        },
+                        "description": "Example of a follow-up query that uses conversation context. This request uses the session_id from the previous query to maintain conversation continuity.\n\n**Key Features:**\n- Uses existing session ID for context\n- Web Owl remembers previous conversation\n- Responses build on previous context\n- Can reference \"the program you mentioned\" etc.\n\n**Note:** Run the \"Query Knowledge Base\" request first to establish a session."
+                    }
+                },
+                {
+                    "name": "Simple Search (GET)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Status code is 200 or 503\", function () {",
+                                    "    pm.expect(pm.response.code).to.be.oneOf([200, 503]);",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Accept",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/search?q=computer science courses&mode=SEMANTIC",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "search"
+                            ],
+                            "query": [
+                                {
+                                    "key": "q",
+                                    "value": "computer science courses",
+                                    "description": "Search query"
+                                },
+                                {
+                                    "key": "mode",
+                                    "value": "SEMANTIC",
+                                    "description": "Search mode (optional, default: HYBRID)"
+                                }
+                            ]
+                        },
+                        "description": "Simple GET endpoint for quick searches using URL parameters.\n\n**Query Parameters:**\n- `q` (required): Search query\n- `mode` (optional): Search mode (default: HYBRID)\n\n**Use Cases:**\n- Quick searches from browser\n- Integration with simple clients\n- Testing without POST requests\n\n**Note:** This endpoint creates a new session for each request."
+                    }
+                }
+            ],
+            "description": "Main query and search endpoints for interacting with the Web Owl RAG system."
+        },
+        {
+            "name": "Conversation Management",
+            "item": [
+                {
+                    "name": "Get Conversation History",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Status code is 200 or 404\", function () {",
+                                    "    pm.expect(pm.response.code).to.be.oneOf([200, 404]);",
+                                    "});",
+                                    "",
+                                    "if (pm.response.code === 200) {",
+                                    "    pm.test(\"Response contains conversation data\", function () {",
+                                    "        var jsonData = pm.response.json();",
+                                    "        pm.expect(jsonData).to.have.property('session_id');",
+                                    "        pm.expect(jsonData).to.have.property('messages');",
+                                    "        pm.expect(jsonData.messages).to.be.an('array');",
+                                    "    });",
+                                    "}"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Accept",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/conversation/{{sessionId}}",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "conversation",
+                                "{{sessionId}}"
+                            ]
+                        },
+                        "description": "Retrieve conversation history for a specific session.\n\n**Path Parameters:**\n- `session_id`: The session ID to retrieve history for\n\n**Response:**\n- `session_id`: Session identifier\n- `messages`: Array of conversation messages\n- `created_at`: Session creation timestamp\n- `last_updated`: Last activity timestamp\n\n**Message Format:**\n- `query`: Original user query\n- `answer`: Web Owl's response\n- `timestamp`: Message timestamp\n- `confidence_score`: Response confidence\n- `sources`: Sources used\n\n**Status Codes:**\n- 200: Success\n- 404: Session not found\n\n**Note:** Use the sessionId from a previous query response."
+                    }
+                },
+                {
+                    "name": "Clear Conversation",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Status code is 200 or 404\", function () {",
+                                    "    pm.expect(pm.response.code).to.be.oneOf([200, 404]);",
+                                    "});",
+                                    "",
+                                    "if (pm.response.code === 200) {",
+                                    "    pm.test(\"Conversation cleared message\", function () {",
+                                    "        var jsonData = pm.response.json();",
+                                    "        pm.expect(jsonData).to.have.property('message');",
+                                    "        pm.expect(jsonData.message).to.include('cleared');",
+                                    "    });",
+                                    "}"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "DELETE",
+                        "header": [
+                            {
+                                "key": "Accept",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/conversation/{{sessionId}}",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "conversation",
+                                "{{sessionId}}"
+                            ]
+                        },
+                        "description": "Clear conversation history for a specific session.\n\n**Path Parameters:**\n- `session_id`: The session ID to clear\n\n**Response:**\n- `message`: Confirmation message\n\n**Status Codes:**\n- 200: Successfully cleared\n- 404: Session not found\n\n**Use Cases:**\n- Reset conversation context\n- Clear sensitive information\n- Start fresh conversation\n- Memory management"
+                    }
+                },
+                {
+                    "name": "List Active Sessions",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "pm.test(\"Status code is 200\", function () {",
+                                    "    pm.response.to.have.status(200);",
+                                    "});",
+                                    "",
+                                    "pm.test(\"Response contains session data\", function () {",
+                                    "    var jsonData = pm.response.json();",
+                                    "    pm.expect(jsonData).to.have.property('active_sessions');",
+                                    "    pm.expect(jsonData).to.have.property('total_sessions');",
+                                    "    pm.expect(jsonData.active_sessions).to.be.an('array');",
+                                    "});"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Accept",
+                                "value": "application/json",
+                                "type": "text"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/sessions",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "sessions"
+                            ]
+                        },
+                        "description": "List all active conversation sessions with basic statistics.\n\n**Response:**\n- `active_sessions`: Array of session IDs\n- `total_sessions`: Total number of sessions\n- `session_details`: Details for each session including:\n  - `message_count`: Number of messages in session\n  - `last_activity`: Timestamp of last activity\n\n**Use Cases:**\n- Session management\n- System monitoring\n- Debugging conversation issues\n- Analytics and usage tracking"
+                    }
+                }
+            ],
+            "description": "Endpoints for managing conversation sessions and history."
+        },
+        {
+            "name": "Example Workflows",
+            "item": [
+                {
+                    "name": "Example 1 - Academic Program Inquiry",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"query\": \"What are the admission requirements for the Master's in Computer Science program?\",\n    \"search_mode\": \"HYBRID\",\n    \"user_id\": \"prospective-student-001\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/query",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "query"
+                            ]
+                        },
+                        "description": "Example workflow for a prospective student inquiring about admission requirements.\n\n**Scenario:** A potential student wants to know admission requirements for a specific program.\n\n**Expected Response:**\n- Detailed admission requirements\n- Application process information\n- Required documents\n- Deadlines and important dates\n- Navigation path to official admission page"
+                    }
+                },
+                {
+                    "name": "Example 2 - Course Information",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"query\": \"Tell me about machine learning courses available in the curriculum\",\n    \"search_mode\": \"MULTIMODAL\",\n    \"user_id\": \"current-student-002\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/query",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "query"
+                            ]
+                        },
+                        "description": "Example workflow for a student looking for specific course information.\n\n**Scenario:** Current student exploring available courses in their area of interest.\n\n**Expected Response:**\n- List of relevant courses\n- Course descriptions and prerequisites\n- Faculty information\n- Related assets (syllabi, course materials)\n- Navigation to course catalog"
+                    }
+                },
+                {
+                    "name": "Example 3 - Follow-up Question",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"query\": \"What are the prerequisites for the first course you mentioned?\",\n    \"search_mode\": \"HYBRID\",\n    \"session_id\": \"{{sessionId}}\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/query",
+                            "host": [
+                                "{{baseUrl}}"
+                            ],
+                            "path": [
+                                "query"
+                            ]
+                        },
+                        "description": "Example of a contextual follow-up question that references previous conversation.\n\n**Scenario:** Student wants more details about a course mentioned in the previous response.\n\n**Key Features:**\n- Uses conversation context\n- References \"the first course you mentioned\"\n- Builds on previous interaction\n- Demonstrates conversation memory\n\n**Note:** This should be run after Example 2 to have proper context."
+                    }
+                }
+            ],
+            "description": "Example workflows demonstrating common use cases and conversation patterns."
+        }
+    ],
+    "event": [
+        {
+            "listen": "prerequest",
+            "script": {
+                "type": "text/javascript",
+                "exec": [
+                    "// Set default baseUrl if not set",
+                    "if (!pm.environment.get('baseUrl')) {",
+                    "    pm.environment.set('baseUrl', 'http://localhost:8000');",
+                    "}"
+                ]
+            }
+        }
+    ],
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:8000",
+            "type": "string"
+        },
+        {
+            "key": "sessionId",
+            "value": "",
+            "type": "string"
+        }
+    ]
+}
