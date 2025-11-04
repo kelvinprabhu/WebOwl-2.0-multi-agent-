@@ -57,7 +57,7 @@ class KnowledgeRetriever:
             return
             
         # Apply text splitting to match what you did during ingestion
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=40)
         
         # Split texts and maintain mapping
         all_split_texts = []

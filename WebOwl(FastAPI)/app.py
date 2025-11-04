@@ -17,7 +17,7 @@ from datetime import datetime
 from neo4j import GraphDatabase
 from KnowledgeRetriever import KnowledgeRetriever, SearchMode
 from OfflineKnowledgeRetriever import OfflineKnowledgeRetriever
-from WebOwlMultiAgentRAG import WebOwlMultiAgentRAG
+from WebOwnMultiAgentRAG2 import WebOwlMultiAgentRAG
 app = FastAPI()
 # Load environment variables
 load_dotenv()
